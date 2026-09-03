@@ -16,13 +16,21 @@ import {
   CalendarDays,
   RotateCcw,
   X,
-  Check
+  Check,
+  Calculator,
+  Receipt
 } from 'lucide-vue-next';
-import type { AttendanceSettings } from '../types/attendance';
+import type { AttendanceSettings, SalaryItem } from '../types/attendance';
 import {
   getDefaultHolidaysForYear,
   getAllDefaultHolidays
 } from '../constants/holidays';
+import {
+  DEFAULT_SALARY_SETTINGS,
+  calculateDailyWage,
+  calculateHourlyWage,
+  formatMoney
+} from '../services/salaryService';
 import {
   exportDataAsJSON,
   importDataFromJSON,
@@ -46,6 +54,88 @@ const localSettings = reactive<AttendanceSettings>(JSON.parse(JSON.stringify(pro
 // 确保 localSettings.customHolidays 初始化（今年数据内置）
 if (!localSettings.customHolidays || Object.keys(localSettings.customHolidays).length === 0) {
   localSettings.customHolidays = getAllDefaultHolidays();
+}
+
+// 确保 localSettings.salary 初始化
+if (!localSettings.salary) {
+  localSettings.salary = JSON.parse(JSON.stringify(DEFAULT_SALARY_SETTINGS));
+} else {
+  if (!localSettings.salary.overtimeRates) {
+    localSettings.salary.overtimeRates = { workday: 1.5, weekend: 2.0, holiday: 3.0 };
+  }
+  if (!Array.isArray(localSettings.salary.otherItems)) {
+    localSettings.salary.otherItems = [];
+  }
+}
+
+// ---------------- 薪资折算与校验 ----------------
+const calculatedDailyWage = computed(() => {
+  const base = Number(localSettings.salary?.baseSalary) || 0;
+  const coef = Number(localSettings.salary?.calculationCoefficient) || 0;
+  return calculateDailyWage(base, coef);
+});
+
+const calculatedHourlyWage = computed(() => {
+  return calculateHourlyWage(calculatedDailyWage.value);
+});
+
+function validateBaseSalary() {
+  if (!localSettings.salary) return;
+  const raw = Number(localSettings.salary.baseSalary);
+  if (isNaN(raw) || raw < 0) {
+    localSettings.salary.baseSalary = 0;
+  } else {
+    localSettings.salary.baseSalary = Math.round(raw * 100) / 100;
+  }
+}
+
+function validateCoefficient() {
+  if (!localSettings.salary) return;
+  const raw = Number(localSettings.salary.calculationCoefficient);
+  if (isNaN(raw) || raw <= 0) {
+    localSettings.salary.calculationCoefficient = 21.75;
+    showToast('计薪天数系数须大于0，已恢复默认 21.75');
+  } else {
+    localSettings.salary.calculationCoefficient = Math.round(raw * 100) / 100;
+  }
+}
+
+function validateRate(key: 'workday' | 'weekend' | 'holiday') {
+  if (!localSettings.salary || !localSettings.salary.overtimeRates) return;
+  const raw = Number(localSettings.salary.overtimeRates[key]);
+  if (isNaN(raw) || raw < 0) {
+    const defaults = { workday: 1.5, weekend: 2.0, holiday: 3.0 };
+    localSettings.salary.overtimeRates[key] = defaults[key];
+  } else {
+    localSettings.salary.overtimeRates[key] = Math.round(raw * 100) / 100;
+  }
+}
+
+function addSalaryItem() {
+  if (!localSettings.salary) return;
+  if (!Array.isArray(localSettings.salary.otherItems)) {
+    localSettings.salary.otherItems = [];
+  }
+  localSettings.salary.otherItems.push({
+    id: `item-${Date.now()}`,
+    name: '',
+    type: 'addition',
+    amount: 0,
+  });
+}
+
+function removeSalaryItem(index: number) {
+  if (!localSettings.salary || !Array.isArray(localSettings.salary.otherItems)) return;
+  localSettings.salary.otherItems.splice(index, 1);
+}
+
+function validateItemAmount(item: SalaryItem) {
+  const raw = Number(item.amount);
+  if (isNaN(raw) || raw < 0) {
+    item.amount = 0;
+  } else {
+    item.amount = Math.round(raw * 100) / 100;
+  }
 }
 
 const toastMessage = ref('');
@@ -701,7 +791,261 @@ function handleExportExcel() {
       </div>
     </div>
 
-    <!-- 5. 本地数据管理与备份 (Notion Section) -->
+    <!-- 5. 薪资设置 – 底薪与工时折算配置 (Notion Section) -->
+    <div v-if="localSettings.salary" class="bg-white dark:bg-[#202020] p-4 rounded-lg border border-[#e9e9e7] dark:border-[#2f3437] space-y-3 shadow-2xs">
+      <div class="flex items-center gap-1.5 pb-2 border-b border-[#e9e9e7] dark:border-[#2f3437]">
+        <Calculator class="w-4 h-4 text-[#787774] dark:text-[#9b9a97]" :stroke-width="1.75" />
+        <h3 class="font-medium text-[#37352f] dark:text-[#e3e2de] text-xs sm:text-sm">薪资设置 – 底薪与工时折算</h3>
+      </div>
+
+      <p class="text-[11px] text-[#9b9a97]">
+        配置您的基本底薪与月计薪天数系数，系统将自动折算日薪与时薪并用于加班费核算：
+      </p>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <!-- 底薪 -->
+        <div>
+          <label class="block text-xs font-normal text-[#787774] dark:text-[#9b9a97] mb-1">
+            基本底薪 (元)
+          </label>
+          <div class="relative">
+            <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-mono text-[#9b9a97]">¥</span>
+            <input
+              v-model.number="localSettings.salary.baseSalary"
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="0.00"
+              @blur="validateBaseSalary"
+              class="w-full pl-6 pr-2.5 py-1.5 rounded border border-[#e9e9e7] dark:border-[#2f3437] bg-white dark:bg-[#252525] text-[#37352f] dark:text-[#e3e2de] focus:border-[#6940a5] focus:outline-none text-xs font-mono"
+            />
+          </div>
+          <p class="text-[11px] text-[#9b9a97] mt-0.5">月度标准计薪基数（非负数，保留两位小数）</p>
+        </div>
+
+        <!-- 计算系数 -->
+        <div>
+          <label class="block text-xs font-normal text-[#787774] dark:text-[#9b9a97] mb-1">
+            月计薪天数系数 (天)
+          </label>
+          <div class="relative">
+            <input
+              v-model.number="localSettings.salary.calculationCoefficient"
+              type="number"
+              step="0.01"
+              min="0.01"
+              placeholder="21.75"
+              @blur="validateCoefficient"
+              class="w-full px-2.5 py-1.5 rounded border border-[#e9e9e7] dark:border-[#2f3437] bg-white dark:bg-[#252525] text-[#37352f] dark:text-[#e3e2de] focus:border-[#6940a5] focus:outline-none text-xs font-mono"
+            />
+            <span class="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-mono text-[#9b9a97]">天/月</span>
+          </div>
+          <p class="text-[11px] text-[#9b9a97] mt-0.5">法定标准月计薪天数默认为 21.75 天</p>
+        </div>
+      </div>
+
+      <!-- 实时折算结果展示 -->
+      <div class="grid grid-cols-2 gap-2 pt-2 border-t border-[#e9e9e7] dark:border-[#2f3437]">
+        <div class="p-2.5 rounded bg-[#f7f6f3] dark:bg-[#252525] border border-[#e9e9e7] dark:border-[#2f3437] flex flex-col justify-between">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] text-[#787774] dark:text-[#9b9a97]">折算日薪 (底薪 ÷ 系数)</span>
+          </div>
+          <div class="mt-1 flex items-baseline gap-1">
+            <span class="text-base sm:text-lg font-semibold font-mono text-[#37352f] dark:text-[#e3e2de]">
+              {{ formatMoney(calculatedDailyWage) }}
+            </span>
+            <span class="text-[10px] text-[#9b9a97]">/天</span>
+          </div>
+        </div>
+
+        <div class="p-2.5 rounded bg-[#f4f0f7]/70 dark:bg-[#2b2438]/40 border border-[#6940a5]/20 flex flex-col justify-between">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] text-[#6940a5] dark:text-[#9a6dd7]">折算时薪 (日薪 ÷ 8)</span>
+          </div>
+          <div class="mt-1 flex items-baseline gap-1">
+            <span class="text-base sm:text-lg font-semibold font-mono text-[#6940a5] dark:text-[#9a6dd7]">
+              {{ formatMoney(calculatedHourlyWage) }}
+            </span>
+            <span class="text-[10px] text-[#9a6dd7]/70">/小时</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. 薪资设置 – 加班工资倍数 (Notion Section) -->
+    <div v-if="localSettings.salary" class="bg-white dark:bg-[#202020] p-4 rounded-lg border border-[#e9e9e7] dark:border-[#2f3437] space-y-3 shadow-2xs">
+      <div class="flex items-center justify-between pb-2 border-b border-[#e9e9e7] dark:border-[#2f3437]">
+        <div class="flex items-center gap-1.5">
+          <Sliders class="w-4 h-4 text-[#787774] dark:text-[#9b9a97]" :stroke-width="1.75" />
+          <h3 class="font-medium text-[#37352f] dark:text-[#e3e2de] text-xs sm:text-sm">薪资设置 – 加班工资倍数</h3>
+        </div>
+        <span class="text-[11px] text-[#9b9a97]">修改后即时生效并保存</span>
+      </div>
+
+      <p class="text-[11px] text-[#9b9a97]">
+        法定标准倍数通常为：工作日 1.5 倍、周末 2 倍、法定节假日 3 倍。系统将依据打卡日期的日历属性自动匹配对应倍数：
+      </p>
+
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+        <!-- 日常加班 -->
+        <div class="p-2.5 rounded border border-[#e9e9e7] dark:border-[#2f3437] bg-white dark:bg-[#252525]">
+          <label class="block text-xs font-medium text-[#37352f] dark:text-[#e3e2de] mb-1">
+            日常加班倍数
+          </label>
+          <div class="relative">
+            <input
+              v-model.number="localSettings.salary.overtimeRates.workday"
+              type="number"
+              step="0.1"
+              min="0"
+              placeholder="1.5"
+              @blur="validateRate('workday')"
+              class="w-full px-2.5 py-1.5 rounded border border-[#e9e9e7] dark:border-[#2f3437] bg-[#fafaf9] dark:bg-[#202020] text-[#37352f] dark:text-[#e3e2de] focus:border-[#6940a5] focus:outline-none text-xs font-mono"
+            />
+            <span class="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-[#9b9a97]">倍</span>
+          </div>
+          <p class="text-[10px] text-[#9b9a97] mt-1">常规工作日及调休补班日</p>
+        </div>
+
+        <!-- 周末加班 -->
+        <div class="p-2.5 rounded border border-[#e9e9e7] dark:border-[#2f3437] bg-white dark:bg-[#252525]">
+          <label class="block text-xs font-medium text-[#37352f] dark:text-[#e3e2de] mb-1">
+            周末加班倍数
+          </label>
+          <div class="relative">
+            <input
+              v-model.number="localSettings.salary.overtimeRates.weekend"
+              type="number"
+              step="0.1"
+              min="0"
+              placeholder="2.0"
+              @blur="validateRate('weekend')"
+              class="w-full px-2.5 py-1.5 rounded border border-[#e9e9e7] dark:border-[#2f3437] bg-[#fafaf9] dark:bg-[#202020] text-[#37352f] dark:text-[#e3e2de] focus:border-[#6940a5] focus:outline-none text-xs font-mono"
+            />
+            <span class="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-[#9b9a97]">倍</span>
+          </div>
+          <p class="text-[10px] text-[#9b9a97] mt-1">周六、周日自然休息日</p>
+        </div>
+
+        <!-- 节假日加班 -->
+        <div class="p-2.5 rounded border border-[#e9e9e7] dark:border-[#2f3437] bg-white dark:bg-[#252525]">
+          <label class="block text-xs font-medium text-[#37352f] dark:text-[#e3e2de] mb-1">
+            节假日加班倍数
+          </label>
+          <div class="relative">
+            <input
+              v-model.number="localSettings.salary.overtimeRates.holiday"
+              type="number"
+              step="0.1"
+              min="0"
+              placeholder="3.0"
+              @blur="validateRate('holiday')"
+              class="w-full px-2.5 py-1.5 rounded border border-[#e9e9e7] dark:border-[#2f3437] bg-[#fafaf9] dark:bg-[#202020] text-[#37352f] dark:text-[#e3e2de] focus:border-[#6940a5] focus:outline-none text-xs font-mono"
+            />
+            <span class="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-[#9b9a97]">倍</span>
+          </div>
+          <p class="text-[10px] text-[#9b9a97] mt-1">元旦/春节/国庆等法定节假日</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 7. 薪资设置 – 其他薪资杂项 (Notion Section) -->
+    <div v-if="localSettings.salary" class="bg-white dark:bg-[#202020] p-4 rounded-lg border border-[#e9e9e7] dark:border-[#2f3437] space-y-3 shadow-2xs">
+      <div class="flex items-center justify-between pb-2 border-b border-[#e9e9e7] dark:border-[#2f3437]">
+        <div class="flex items-center gap-1.5">
+          <Receipt class="w-4 h-4 text-[#787774] dark:text-[#9b9a97]" :stroke-width="1.75" />
+          <h3 class="font-medium text-[#37352f] dark:text-[#e3e2de] text-xs sm:text-sm">薪资设置 – 其他杂项 (津贴 / 扣款)</h3>
+        </div>
+        <button
+          @click="addSalaryItem"
+          type="button"
+          class="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium text-[#6940a5] dark:text-[#9a6dd7] border border-[#e9e9e7] dark:border-[#2f3437] hover:bg-[#f4f0f7] dark:hover:bg-[#2b2438] transition-colors"
+        >
+          <Plus class="w-3.5 h-3.5" :stroke-width="1.75" />
+          <span>添加杂项</span>
+        </button>
+      </div>
+
+      <p class="text-[11px] text-[#9b9a97]">
+        支持自定义增减款项（如岗位补贴、全勤奖、绩效奖金、五险一金代扣、迟到扣款等），并实时计入统计报表实发薪资：
+      </p>
+
+      <div
+        v-if="localSettings.salary.otherItems.length === 0"
+        class="text-xs text-[#9b9a97] py-3 text-center border border-dashed border-[#e9e9e7] dark:border-[#2f3437] rounded"
+      >
+        暂无其他杂项，点击右上角「添加杂项」新增
+      </div>
+
+      <div v-else class="space-y-2">
+        <div
+          v-for="(item, index) in localSettings.salary.otherItems"
+          :key="item.id"
+          class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 p-2 rounded bg-[#fbfbfa] dark:bg-[#252525] border border-[#e9e9e7] dark:border-[#2f3437]"
+        >
+          <!-- 类型选择：加项 / 减项 -->
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              @click="item.type = 'addition'"
+              class="px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer"
+              :class="[
+                item.type === 'addition'
+                  ? 'bg-[#edf3ec] text-[#448361] dark:bg-[#203126] dark:text-[#4d9375] font-semibold ring-1 ring-[#448361]/30'
+                  : 'text-[#787774] dark:text-[#9b9a97] hover:bg-[#f1f1ef] dark:hover:bg-[#2a2a2a]'
+              ]"
+            >
+              加项 (+)
+            </button>
+            <button
+              type="button"
+              @click="item.type = 'deduction'"
+              class="px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer"
+              :class="[
+                item.type === 'deduction'
+                  ? 'bg-[#fbe4e4] text-[#e03e3e] dark:bg-[#3c2121] dark:text-[#eb5757] font-semibold ring-1 ring-[#e03e3e]/30'
+                  : 'text-[#787774] dark:text-[#9b9a97] hover:bg-[#f1f1ef] dark:hover:bg-[#2a2a2a]'
+              ]"
+            >
+              减项 (-)
+            </button>
+          </div>
+
+          <!-- 名称输入 -->
+          <input
+            v-model="item.name"
+            placeholder="项目名称 (如餐补、五险一金)"
+            class="flex-1 px-2.5 py-1 rounded border border-[#e9e9e7] dark:border-[#2f3437] bg-white dark:bg-[#202020] text-xs text-[#37352f] dark:text-[#e3e2de] focus:border-[#6940a5] focus:outline-none"
+          />
+
+          <!-- 金额输入 -->
+          <div class="relative w-full sm:w-32">
+            <span class="absolute left-2 top-1/2 -translate-y-1/2 text-xs font-mono text-[#9b9a97]">¥</span>
+            <input
+              v-model.number="item.amount"
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="0.00"
+              @blur="validateItemAmount(item)"
+              class="w-full pl-5 pr-2 py-1 rounded border border-[#e9e9e7] dark:border-[#2f3437] bg-white dark:bg-[#202020] text-xs text-[#37352f] dark:text-[#e3e2de] focus:border-[#6940a5] focus:outline-none font-mono"
+            />
+          </div>
+
+          <!-- 删除按钮 -->
+          <button
+            @click="removeSalaryItem(index)"
+            type="button"
+            class="self-end sm:self-center p-1 text-[#9b9a97] hover:text-[#e03e3e] transition-colors"
+            title="删除此杂项"
+          >
+            <Trash2 class="w-3.5 h-3.5" :stroke-width="1.75" />
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 8. 本地数据管理与备份 (Notion Section) -->
     <div class="bg-white dark:bg-[#202020] p-4 rounded-lg border border-[#e9e9e7] dark:border-[#2f3437] space-y-3 shadow-2xs">
       <div class="flex items-center gap-1.5 pb-2 border-b border-[#e9e9e7] dark:border-[#2f3437]">
         <Database class="w-4 h-4 text-[#787774] dark:text-[#9b9a97]" :stroke-width="1.75" />

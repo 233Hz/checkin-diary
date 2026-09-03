@@ -4,10 +4,12 @@ import * as echarts from 'echarts';
 import {
   TrendingUp,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Calculator
 } from 'lucide-vue-next';
 import type { AttendanceSettings, DailyRecord } from '../types/attendance';
 import { getMonthlyStats, getAnnualStats } from '../services/statsService';
+import { calculateMonthlySalary, formatMoney } from '../services/salaryService';
 
 const props = defineProps<{
   settings: AttendanceSettings;
@@ -27,6 +29,11 @@ let chartInstance: echarts.ECharts | null = null;
 // 月度统计
 const monthlyData = computed(() => {
   return getMonthlyStats(selectedYear.value, selectedMonth.value, props.records, props.settings);
+});
+
+// 月度薪资计算
+const monthlySalary = computed(() => {
+  return calculateMonthlySalary(monthlyData.value, props.settings.salary);
 });
 
 // 年度统计
@@ -414,6 +421,164 @@ function nextPeriod() {
           <span class="text-xs text-[#9b9a97]">天</span>
         </div>
         <p class="text-[10px] text-[#9b9a97] mt-0.5">置换调休</p>
+      </div>
+    </div>
+
+    <!-- 月度薪资核算区块 (Notion Section) -->
+    <div
+      v-if="mode === 'month'"
+      class="bg-white dark:bg-[#202020] p-4 rounded-lg border border-[#e9e9e7] dark:border-[#2f3437] space-y-3.5 shadow-2xs"
+    >
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-2 border-b border-[#e9e9e7] dark:border-[#2f3437] gap-1.5">
+        <div class="flex items-center gap-2">
+          <Calculator class="w-4 h-4 text-[#6940a5] dark:text-[#9a6dd7]" :stroke-width="1.75" />
+          <h3 class="font-medium text-[#37352f] dark:text-[#e3e2de] text-xs sm:text-sm">
+            {{ selectedYear }} 年 {{ selectedMonth }} 月 薪资核算明细
+          </h3>
+        </div>
+        <div class="text-[11px] text-[#9b9a97]">
+          折算时薪: <span class="font-mono text-[#6940a5] dark:text-[#9a6dd7] font-semibold">{{ formatMoney(monthlySalary.hourlyWage) }}</span> /h
+          <span class="text-[10px] ml-1">（日薪 {{ formatMoney(monthlySalary.dailyWage) }} ÷ 8）</span>
+        </div>
+      </div>
+
+      <!-- 实发薪资总览卡片 (Notion Highlight Callout) -->
+      <div class="p-3.5 rounded-lg bg-[#f7f6f3] dark:bg-[#252525] border border-[#e9e9e7] dark:border-[#2f3437] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <span class="text-xs font-normal text-[#787774] dark:text-[#9b9a97] block">
+            本月预计实发薪资 (实发金额)
+          </span>
+          <div class="mt-1 flex items-baseline gap-1.5">
+            <span class="text-2xl sm:text-3xl font-bold font-mono text-[#37352f] dark:text-[#e3e2de]">
+              {{ formatMoney(monthlySalary.netSalary) }}
+            </span>
+            <span class="text-xs text-[#9b9a97]">元</span>
+          </div>
+          <p class="text-[11px] text-[#9b9a97] mt-0.5">
+            公式：底薪 ({{ formatMoney(monthlySalary.baseSalary) }}) + 加班费 ({{ formatMoney(monthlySalary.totalOvertimePay) }}) + 杂项加项 ({{ formatMoney(monthlySalary.totalAdditions) }}) - 杂项减项 ({{ formatMoney(monthlySalary.totalDeductions) }})
+          </p>
+        </div>
+
+        <!-- 4项快速汇总徽章 -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+          <div class="px-2.5 py-1.5 rounded bg-white dark:bg-[#202020] border border-[#e9e9e7] dark:border-[#2f3437]">
+            <span class="text-[10px] text-[#787774] dark:text-[#9b9a97] block">基本底薪</span>
+            <span class="font-mono font-medium text-[#37352f] dark:text-[#e3e2de]">{{ formatMoney(monthlySalary.baseSalary) }}</span>
+          </div>
+          <div class="px-2.5 py-1.5 rounded bg-white dark:bg-[#202020] border border-[#e9e9e7] dark:border-[#2f3437]">
+            <span class="text-[10px] text-[#6940a5] dark:text-[#9a6dd7] block">加班工资</span>
+            <span class="font-mono font-medium text-[#6940a5] dark:text-[#9a6dd7]">+{{ formatMoney(monthlySalary.totalOvertimePay) }}</span>
+          </div>
+          <div class="px-2.5 py-1.5 rounded bg-white dark:bg-[#202020] border border-[#e9e9e7] dark:border-[#2f3437]">
+            <span class="text-[10px] text-[#448361] dark:text-[#4d9375] block">杂项加项</span>
+            <span class="font-mono font-medium text-[#448361] dark:text-[#4d9375]">+{{ formatMoney(monthlySalary.totalAdditions) }}</span>
+          </div>
+          <div class="px-2.5 py-1.5 rounded bg-white dark:bg-[#202020] border border-[#e9e9e7] dark:border-[#2f3437]">
+            <span class="text-[10px] text-[#e03e3e] dark:text-[#eb5757] block">杂项减项</span>
+            <span class="font-mono font-medium text-[#e03e3e] dark:text-[#eb5757]">-{{ formatMoney(monthlySalary.totalDeductions) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 详细分解网格：左侧各类加班工资、右侧杂项明细 -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <!-- 左侧：加班工资拆解 -->
+        <div class="p-3 rounded-md border border-[#e9e9e7] dark:border-[#2f3437] bg-[#fafaf9] dark:bg-[#232323] space-y-2">
+          <div class="flex items-center justify-between pb-1.5 border-b border-[#e9e9e7] dark:border-[#2f3437]">
+            <span class="text-xs font-medium text-[#37352f] dark:text-[#e3e2de] flex items-center gap-1">
+              <span>各类加班工资明细</span>
+              <span class="text-[10px] text-[#9b9a97] font-normal font-mono">(累计 {{ monthlySalary.totalOvertimeHours }}h)</span>
+            </span>
+            <span class="text-xs font-mono font-semibold text-[#6940a5] dark:text-[#9a6dd7]">
+              小计 +{{ formatMoney(monthlySalary.totalOvertimePay) }}
+            </span>
+          </div>
+
+          <div class="space-y-1.5 text-xs">
+            <!-- 日常加班 -->
+            <div class="flex items-center justify-between py-1.5 px-2 rounded bg-white dark:bg-[#202020]">
+              <div>
+                <span class="font-medium text-[#37352f] dark:text-[#e3e2de]">日常加班</span>
+                <span class="text-[11px] text-[#9b9a97] ml-1 font-mono">({{ monthlySalary.workdayHours }}h × {{ monthlySalary.workdayRate }}倍)</span>
+              </div>
+              <span class="font-mono text-[#6940a5] dark:text-[#9a6dd7] font-medium">
+                +{{ formatMoney(monthlySalary.workdayPay) }}
+              </span>
+            </div>
+
+            <!-- 周末加班 -->
+            <div class="flex items-center justify-between py-1.5 px-2 rounded bg-white dark:bg-[#202020]">
+              <div>
+                <span class="font-medium text-[#37352f] dark:text-[#e3e2de]">周末加班</span>
+                <span class="text-[11px] text-[#9b9a97] ml-1 font-mono">({{ monthlySalary.weekendHours }}h × {{ monthlySalary.weekendRate }}倍)</span>
+              </div>
+              <span class="font-mono text-[#6940a5] dark:text-[#9a6dd7] font-medium">
+                +{{ formatMoney(monthlySalary.weekendPay) }}
+              </span>
+            </div>
+
+            <!-- 节假日加班 -->
+            <div class="flex items-center justify-between py-1.5 px-2 rounded bg-white dark:bg-[#202020]">
+              <div>
+                <span class="font-medium text-[#37352f] dark:text-[#e3e2de]">节假日加班</span>
+                <span class="text-[11px] text-[#9b9a97] ml-1 font-mono">({{ monthlySalary.holidayHours }}h × {{ monthlySalary.holidayRate }}倍)</span>
+              </div>
+              <span class="font-mono text-[#6940a5] dark:text-[#9a6dd7] font-medium">
+                +{{ formatMoney(monthlySalary.holidayPay) }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右侧：其他杂项明细 -->
+        <div class="p-3 rounded-md border border-[#e9e9e7] dark:border-[#2f3437] bg-[#fafaf9] dark:bg-[#232323] space-y-2">
+          <div class="flex items-center justify-between pb-1.5 border-b border-[#e9e9e7] dark:border-[#2f3437]">
+            <span class="text-xs font-medium text-[#37352f] dark:text-[#e3e2de] flex items-center gap-1">
+              <span>其他杂项明细</span>
+              <span class="text-[10px] text-[#9b9a97] font-normal font-mono">({{ monthlySalary.additionItems.length + monthlySalary.deductionItems.length }} 项)</span>
+            </span>
+            <div class="flex items-center gap-2 text-xs font-mono">
+              <span class="text-[#448361] dark:text-[#4d9375] font-medium">+{{ formatMoney(monthlySalary.totalAdditions) }}</span>
+              <span class="text-[#e03e3e] dark:text-[#eb5757] font-medium">-{{ formatMoney(monthlySalary.totalDeductions) }}</span>
+            </div>
+          </div>
+
+          <div v-if="monthlySalary.additionItems.length === 0 && monthlySalary.deductionItems.length === 0" class="py-4 text-center text-xs text-[#9b9a97]">
+            暂无杂项配置，可在「设置」中添加餐补、全勤奖、五险一金等
+          </div>
+
+          <div v-else class="space-y-1.5 max-h-36 overflow-y-auto pr-0.5">
+            <!-- 加项列表 -->
+            <div
+              v-for="item in monthlySalary.additionItems"
+              :key="item.id"
+              class="flex items-center justify-between py-1 px-2 rounded bg-white dark:bg-[#202020] text-xs"
+            >
+              <div class="flex items-center gap-1.5">
+                <span class="px-1 py-0.2 rounded text-[10px] bg-[#edf3ec] text-[#448361] dark:bg-[#203126] dark:text-[#4d9375] font-medium">加</span>
+                <span class="text-[#37352f] dark:text-[#e3e2de]">{{ item.name || '未命名加项' }}</span>
+              </div>
+              <span class="font-mono text-[#448361] dark:text-[#4d9375] font-medium">
+                +{{ formatMoney(item.amount) }}
+              </span>
+            </div>
+
+            <!-- 减项列表 -->
+            <div
+              v-for="item in monthlySalary.deductionItems"
+              :key="item.id"
+              class="flex items-center justify-between py-1 px-2 rounded bg-white dark:bg-[#202020] text-xs"
+            >
+              <div class="flex items-center gap-1.5">
+                <span class="px-1 py-0.2 rounded text-[10px] bg-[#fbe4e4] text-[#e03e3e] dark:bg-[#3c2121] dark:text-[#eb5757] font-medium">减</span>
+                <span class="text-[#37352f] dark:text-[#e3e2de]">{{ item.name || '未命名减项' }}</span>
+              </div>
+              <span class="font-mono text-[#e03e3e] dark:text-[#eb5757] font-medium">
+                -{{ formatMoney(item.amount) }}
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

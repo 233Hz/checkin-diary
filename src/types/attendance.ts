@@ -14,6 +14,24 @@ export interface CustomHolidayItem {
   isHoliday: boolean; // true: 放假, false: 调休补班
 }
 
+export interface SalaryItem {
+  id: string;
+  name: string;
+  type: 'addition' | 'deduction'; // 加项 / 减项
+  amount: number;
+}
+
+export interface SalarySettings {
+  baseSalary: number; // 底薪
+  calculationCoefficient: number; // 计算系数，默认 21.75
+  overtimeRates: {
+    workday: number; // 日常加班倍数，默认 1.5
+    weekend: number; // 周末加班倍数，默认 2.0
+    holiday: number; // 节假日加班倍数，默认 3.0
+  };
+  otherItems: SalaryItem[]; // 杂项加减项列表
+}
+
 export interface AttendanceSettings {
   workSchedule: {
     start: string; // "09:00"
@@ -26,6 +44,7 @@ export interface AttendanceSettings {
   weekendHolidayAsOvertime: boolean; // 周末/节假日出勤全额计为加班
   theme: 'light' | 'dark' | 'system';
   customHolidays?: Record<string, CustomHolidayItem>; // 用户自定义/官方内置的节假日与调休配置
+  salary?: SalarySettings; // 薪资配置
 }
 
 export interface DailyRecord {
@@ -63,6 +82,9 @@ export interface MonthlyStats {
   year: number;
   month: number; // 1-12
   totalOvertimeHours: number;
+  workdayOvertimeHours: number; // 日常加班工时
+  weekendOvertimeHours: number; // 周末加班工时
+  holidayOvertimeHours: number; // 节假日加班工时
   actualWorkDays: number;
   absentDays: number;
   leaveDays: number;

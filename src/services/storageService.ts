@@ -1,5 +1,6 @@
 import type { AttendanceSettings, DailyRecord } from '../types/attendance';
 import { getAllDefaultHolidays } from '../constants/holidays';
+import { DEFAULT_SALARY_SETTINGS } from './salaryService';
 
 const SETTINGS_KEY = 'checkin_diary_settings_v1';
 const RECORDS_KEY = 'checkin_diary_records_v1';
@@ -19,6 +20,7 @@ export const DEFAULT_SETTINGS: AttendanceSettings = {
   weekendHolidayAsOvertime: true,
   theme: 'system',
   customHolidays: getAllDefaultHolidays(),
+  salary: DEFAULT_SALARY_SETTINGS,
 };
 
 export function getSettings(): AttendanceSettings {
@@ -33,6 +35,17 @@ export function getSettings(): AttendanceSettings {
       workSchedule: {
         ...DEFAULT_SETTINGS.workSchedule,
         ...(parsed.workSchedule || {}),
+      },
+      salary: {
+        ...DEFAULT_SALARY_SETTINGS,
+        ...(parsed.salary || {}),
+        overtimeRates: {
+          ...DEFAULT_SALARY_SETTINGS.overtimeRates,
+          ...(parsed.salary?.overtimeRates || {}),
+        },
+        otherItems: Array.isArray(parsed.salary?.otherItems)
+          ? parsed.salary.otherItems
+          : DEFAULT_SALARY_SETTINGS.otherItems,
       },
     };
   } catch (err) {
@@ -201,4 +214,23 @@ export function seedSampleData(): void {
   }
 
   saveRecords(sampleRecords);
+
+  const currentSettings = getSettings();
+  if (!currentSettings.salary || currentSettings.salary.baseSalary === 0) {
+    currentSettings.salary = {
+      baseSalary: 8000,
+      calculationCoefficient: 21.75,
+      overtimeRates: {
+        workday: 1.5,
+        weekend: 2.0,
+        holiday: 3.0,
+      },
+      otherItems: [
+        { id: 'item-sample-1', name: '全勤奖', type: 'addition', amount: 300 },
+        { id: 'item-sample-2', name: '餐饮补贴', type: 'addition', amount: 500 },
+        { id: 'item-sample-3', name: '社保公积金代扣', type: 'deduction', amount: 820 },
+      ],
+    };
+    saveSettings(currentSettings);
+  }
 }

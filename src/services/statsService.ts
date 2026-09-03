@@ -16,6 +16,9 @@ export function getMonthlyStats(
   today.setHours(23, 59, 59, 999);
 
   let totalOvertimeHours = 0;
+  let workdayOvertimeHours = 0;
+  let weekendOvertimeHours = 0;
+  let holidayOvertimeHours = 0;
   let actualWorkDays = 0;
   let absentDays = 0;
   let leaveDays = 0;
@@ -41,6 +44,15 @@ export function getMonthlyStats(
           const otRes = calculateOvertime(r.clockIn, r.clockOut, r.isNextDayOut, !holiday.isWorkday, settings);
           otHours = otRes.finalOvertimeHours;
           totalOvertimeHours += otHours;
+          if (otHours > 0) {
+            if (holiday.type === 'statutory_holiday') {
+              holidayOvertimeHours += otHours;
+            } else if (holiday.type === 'weekend') {
+              weekendOvertimeHours += otHours;
+            } else {
+              workdayOvertimeHours += otHours;
+            }
+          }
         }
       } else if (r.status === 'absent') {
         absentDays++;
@@ -73,6 +85,9 @@ export function getMonthlyStats(
     year,
     month,
     totalOvertimeHours: Math.round(totalOvertimeHours * 100) / 100,
+    workdayOvertimeHours: Math.round(workdayOvertimeHours * 100) / 100,
+    weekendOvertimeHours: Math.round(weekendOvertimeHours * 100) / 100,
+    holidayOvertimeHours: Math.round(holidayOvertimeHours * 100) / 100,
     actualWorkDays,
     absentDays,
     leaveDays,
