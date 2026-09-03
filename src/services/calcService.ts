@@ -54,11 +54,12 @@ export function calculateOvertime(
   let inMin = timeStringToMinutes(clockIn);
   let outMin = timeStringToMinutes(clockOut);
 
-  // 跨天判断：若明确声明 isNextDayOut，或者 outMin < inMin，或者 outMin 小于等于日界分割时间（例如 06:00），视为跨天打卡
+  // 跨天判断：若明确声明 isNextDayOut 为 true，或下班时间早于上班时间（通宵跨天），或下班时间落在次日凌晨日界分割点内且上班时间在此之后
   const cutoffMin = timeStringToMinutes(settings.dayBoundaryCutoff || '06:00');
   const actualIsNextDay =
     isNextDayOut === true ||
-    (isNextDayOut === undefined && (outMin < inMin || outMin <= cutoffMin));
+    outMin < inMin ||
+    (outMin <= cutoffMin && inMin > cutoffMin);
 
   if (actualIsNextDay) {
     outMin += 1440; // 加上 24 小时

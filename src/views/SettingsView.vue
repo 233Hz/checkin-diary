@@ -18,7 +18,8 @@ import {
   X,
   Check,
   Calculator,
-  Receipt
+  Receipt,
+  Save
 } from 'lucide-vue-next';
 import type { AttendanceSettings, SalaryItem } from '../types/attendance';
 import {
@@ -35,7 +36,9 @@ import {
   exportDataAsJSON,
   importDataFromJSON,
   clearAllData,
-  seedSampleData
+  seedSampleData,
+  DEFAULT_SETTINGS,
+  getSettings
 } from '../services/storageService';
 import { exportAttendanceToExcel } from '../services/excelService';
 
@@ -49,24 +52,46 @@ const emit = defineEmits<{
   (e: 'refresh-data'): void;
 }>();
 
-const localSettings = reactive<AttendanceSettings>(JSON.parse(JSON.stringify(props.settings)));
-
-// 确保 localSettings.customHolidays 初始化（今年数据内置）
-if (!localSettings.customHolidays || Object.keys(localSettings.customHolidays).length === 0) {
-  localSettings.customHolidays = getAllDefaultHolidays();
+function cloneAndNormalizeSettings(src: AttendanceSettings): AttendanceSettings {
+  const cloned: AttendanceSettings = JSON.parse(JSON.stringify(src || DEFAULT_SETTINGS));
+  if (!cloned.customHolidays || Object.keys(cloned.customHolidays).length === 0) {
+    cloned.customHolidays = getAllDefaultHolidays();
+  }
+  if (!cloned.salary) {
+    cloned.salary = JSON.parse(JSON.stringify(DEFAULT_SALARY_SETTINGS));
+  } else {
+    if (!cloned.salary.overtimeRates) {
+      cloned.salary.overtimeRates = { workday: 1.5, weekend: 2.0, holiday: 3.0 };
+    }
+    if (!Array.isArray(cloned.salary.otherItems)) {
+      cloned.salary.otherItems = [];
+    }
+  }
+  return cloned;
 }
 
-// 确保 localSettings.salary 初始化
-if (!localSettings.salary) {
-  localSettings.salary = JSON.parse(JSON.stringify(DEFAULT_SALARY_SETTINGS));
-} else {
-  if (!localSettings.salary.overtimeRates) {
-    localSettings.salary.overtimeRates = { workday: 1.5, weekend: 2.0, holiday: 3.0 };
-  }
-  if (!Array.isArray(localSettings.salary.otherItems)) {
-    localSettings.salary.otherItems = [];
-  }
-}
+// 草稿状态对象
+const localSettings = reactive<AttendanceSettings>(cloneAndNormalizeSettings(props.settings));
+// 记录上次已保存快照
+const savedSettingsSnapshot = ref(JSON.stringify(localSettings));
+// 是否存在未保存修改
+const hasUnsavedChanges = computed(() => JSON.stringify(localSettings) !== savedSettingsSnapshot.value);
+
+// 外部设置变更同步（仅在当前没有未保存草稿时自动同步）
+watch(
+  () => props.settings,
+  (newSettings) => {
+    if (!hasUnsavedChanges.value) {
+      const normalized = cloneAndNormalizeSettings(newSettings);
+      Object.keys(localSettings).forEach((k) => {
+        delete (localSettings as any)[k];
+      });
+      Object.assign(localSettings, normalized);
+      savedSettingsSnapshot.value = JSON.stringify(normalized);
+    }
+  },
+  { deep: true }
+);
 
 // ---------------- 薪资折算与校验 ----------------
 const calculatedDailyWage = computed(() => {
@@ -143,16 +168,40 @@ function showToast(msg: string) {
   toastMessage.value = msg;
   setTimeout(() => {
     toastMessage.value = '';
-  }, 2200);
+  }, 2400);
 }
 
-watch(
-  localSettings,
-  (newVal) => {
-    emit('update-settings', JSON.parse(JSON.stringify(newVal)));
-  },
-  { deep: true }
-);
+// ---------------- 保存与放弃修改 ----------------
+function handleSaveSettings() {
+  validateBaseSalary();
+  validateCoefficient();
+  validateRate('workday');
+  validateRate('weekend');
+  validateRate('holiday');
+  if (localSettings.salary && Array.isArray(localSettings.salary.otherItems)) {
+    localSettings.salary.otherItems.forEach(validateItemAmount);
+  }
+
+  const payload = JSON.parse(JSON.stringify(localSettings));
+  savedSettingsSnapshot.value = JSON.stringify(payload);
+  emit('update-settings', payload);
+  showToast('设置已成功保存并立即生效');
+}
+
+function handleDiscardChanges() {
+  const saved = JSON.parse(savedSettingsSnapshot.value);
+  Object.keys(localSettings).forEach((k) => {
+    delete (localSettings as any)[k];
+  });
+  Object.assign(localSettings, saved);
+  showToast('已放弃未保存修改，恢复为上次保存的值');
+}
+
+defineExpose({
+  hasUnsavedChanges,
+  discardChanges: handleDiscardChanges,
+  saveChanges: handleSaveSettings,
+});
 
 // ---------------- 节假日与调休配置 ----------------
 const availableYears = [2024, 2025, 2026, 2027];
@@ -309,6 +358,12 @@ function handleFileImportJSON(e: Event) {
     if (res.success) {
       showToast(`成功恢复 ${res.count} 条记录`);
       emit('refresh-data');
+      const fresh = cloneAndNormalizeSettings(getSettings());
+      Object.keys(localSettings).forEach((k) => {
+        delete (localSettings as any)[k];
+      });
+      Object.assign(localSettings, fresh);
+      savedSettingsSnapshot.value = JSON.stringify(fresh);
     } else {
       alert(`导入失败: ${res.error}`);
     }
@@ -320,6 +375,12 @@ function handleLoadSampleData() {
   if (confirm('是否注入当月演示样例数据？（已有同日记录将被覆盖）')) {
     seedSampleData();
     emit('refresh-data');
+    const fresh = cloneAndNormalizeSettings(getSettings());
+    Object.keys(localSettings).forEach((k) => {
+      delete (localSettings as any)[k];
+    });
+    Object.assign(localSettings, fresh);
+    savedSettingsSnapshot.value = JSON.stringify(fresh);
     showToast('样例数据已注入');
   }
 }
@@ -327,6 +388,12 @@ function handleLoadSampleData() {
 function handleClearAll() {
   if (confirm('警告：此操作将清空所有本地考勤数据与自定义设置，无法撤回！确定清空吗？')) {
     clearAllData();
+    const defaults = cloneAndNormalizeSettings(DEFAULT_SETTINGS);
+    Object.keys(localSettings).forEach((k) => {
+      delete (localSettings as any)[k];
+    });
+    Object.assign(localSettings, defaults);
+    savedSettingsSnapshot.value = JSON.stringify(defaults);
     emit('refresh-data');
     showToast('数据已全部清空');
   }
@@ -338,14 +405,59 @@ function handleExportExcel() {
 </script>
 
 <template>
-  <div class="space-y-3.5 pb-12 max-w-3xl mx-auto">
+  <div class="space-y-3.5 pb-16 max-w-3xl mx-auto">
     <!-- Notion 浮动通知 Toast -->
     <div
       v-if="toastMessage"
-      class="fixed top-14 left-1/2 -translate-x-1/2 z-50 bg-[#37352f] text-white dark:bg-[#e3e2de] dark:text-[#191919] px-3.5 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 shadow-md"
+      class="fixed top-14 left-1/2 -translate-x-1/2 z-50 bg-[#37352f] text-white dark:bg-[#e3e2de] dark:text-[#191919] px-3.5 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 shadow-md animate-fade-in"
     >
       <CheckCircle class="w-3.5 h-3.5 text-[#448361]" />
       <span>{{ toastMessage }}</span>
+    </div>
+
+    <!-- 顶部状态与显式保存/取消栏 (Sticky Action Bar) -->
+    <div class="sticky top-12 z-30 bg-[#f7f6f3]/95 dark:bg-[#191919]/95 backdrop-blur-xs py-2 px-3 rounded-lg border border-[#e9e9e7] dark:border-[#2f3437] shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition-colors">
+      <div class="flex items-center gap-2">
+        <span
+          class="w-2.5 h-2.5 rounded-full shrink-0 transition-colors"
+          :class="hasUnsavedChanges ? 'bg-[#d9730d] animate-pulse' : 'bg-[#448361]'"
+        ></span>
+        <div>
+          <span class="text-xs font-medium text-[#37352f] dark:text-[#e3e2de]">
+            {{ hasUnsavedChanges ? '存在未保存修改项（草稿中）' : '所有规则已是最新（已生效）' }}
+          </span>
+          <span v-if="hasUnsavedChanges" class="text-[11px] text-[#9b9a97] hidden sm:inline ml-1.5">
+            — 需点击保存后才真正写入并生效
+          </span>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 self-end sm:self-auto">
+        <button
+          v-if="hasUnsavedChanges"
+          type="button"
+          @click="handleDiscardChanges"
+          class="flex items-center gap-1 px-3 py-1.5 rounded text-xs text-[#787774] dark:text-[#9b9a97] hover:bg-[#ebeae5] dark:hover:bg-[#2d2d2d] transition-colors cursor-pointer"
+        >
+          <RotateCcw class="w-3.5 h-3.5" :stroke-width="1.75" />
+          <span>放弃修改</span>
+        </button>
+
+        <button
+          type="button"
+          @click="handleSaveSettings"
+          :disabled="!hasUnsavedChanges"
+          class="flex items-center gap-1.5 px-4 py-1.5 rounded text-xs font-medium transition-all shadow-2xs"
+          :class="[
+            hasUnsavedChanges
+              ? 'bg-[#6940a5] hover:bg-[#58338f] text-white cursor-pointer ring-1 ring-[#6940a5]/50'
+              : 'bg-[#ebeae5] dark:bg-[#2d2d2d] text-[#9b9a97] cursor-not-allowed'
+          ]"
+        >
+          <Save class="w-3.5 h-3.5" :stroke-width="2" />
+          <span>{{ hasUnsavedChanges ? '保存设置' : '已保存' }}</span>
+        </button>
+      </div>
     </div>
 
     <!-- 1. 工作时间段与日界设置 (Notion Section) -->
@@ -1113,6 +1225,46 @@ function handleExportExcel() {
           class="px-2 py-0.5 rounded border border-[#e03e3e]/30 text-[#e03e3e] dark:text-[#eb5757] text-xs hover:bg-[#fbe4e4] dark:hover:bg-[#3c2121] transition-colors"
         >
           全部清空
+        </button>
+      </div>
+    </div>
+
+    <!-- 底部保存/取消操作栏 -->
+    <div class="flex items-center justify-between p-3.5 bg-white dark:bg-[#202020] rounded-lg border border-[#e9e9e7] dark:border-[#2f3437] shadow-2xs">
+      <div class="flex items-center gap-2">
+        <span
+          class="w-2.5 h-2.5 rounded-full shrink-0 transition-colors"
+          :class="hasUnsavedChanges ? 'bg-[#d9730d] animate-pulse' : 'bg-[#448361]'"
+        ></span>
+        <span class="text-xs text-[#787774] dark:text-[#9b9a97]">
+          {{ hasUnsavedChanges ? '当前有未保存的草稿修改' : '所有规则设置已保存并生效' }}
+        </span>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button
+          v-if="hasUnsavedChanges"
+          type="button"
+          @click="handleDiscardChanges"
+          class="flex items-center gap-1 px-3 py-1.5 rounded text-xs text-[#787774] dark:text-[#9b9a97] hover:bg-[#ebeae5] dark:hover:bg-[#2d2d2d] transition-colors cursor-pointer"
+        >
+          <RotateCcw class="w-3.5 h-3.5" :stroke-width="1.75" />
+          <span>放弃修改</span>
+        </button>
+
+        <button
+          type="button"
+          @click="handleSaveSettings"
+          :disabled="!hasUnsavedChanges"
+          class="flex items-center gap-1.5 px-4 py-1.5 rounded text-xs font-medium transition-all shadow-2xs"
+          :class="[
+            hasUnsavedChanges
+              ? 'bg-[#6940a5] hover:bg-[#58338f] text-white cursor-pointer ring-1 ring-[#6940a5]/50'
+              : 'bg-[#ebeae5] dark:bg-[#2d2d2d] text-[#9b9a97] cursor-not-allowed'
+          ]"
+        >
+          <Save class="w-3.5 h-3.5" :stroke-width="2" />
+          <span>{{ hasUnsavedChanges ? '保存设置' : '已保存' }}</span>
         </button>
       </div>
     </div>

@@ -1,6 +1,6 @@
 import type { AttendanceSettings, DailyRecord } from '../types/attendance';
 import { getAllDefaultHolidays } from '../constants/holidays';
-import { DEFAULT_SALARY_SETTINGS } from './salaryService';
+import { DEFAULT_SALARY_SETTINGS, clearSalarySnapshots } from './salaryService';
 
 const SETTINGS_KEY = 'checkin_diary_settings_v1';
 const RECORDS_KEY = 'checkin_diary_records_v1';
@@ -111,6 +111,7 @@ export function deleteRecord(date: string): void {
 export function clearAllData(): void {
   localStorage.removeItem(RECORDS_KEY);
   localStorage.removeItem(SETTINGS_KEY);
+  clearSalarySnapshots();
 }
 
 export function exportDataAsJSON(): string {

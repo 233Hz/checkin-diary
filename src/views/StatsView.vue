@@ -5,11 +5,19 @@ import {
   TrendingUp,
   ChevronLeft,
   ChevronRight,
-  Calculator
+  Calculator,
+  RotateCcw,
+  CheckCircle
 } from 'lucide-vue-next';
 import type { AttendanceSettings, DailyRecord } from '../types/attendance';
 import { getMonthlyStats, getAnnualStats } from '../services/statsService';
-import { calculateMonthlySalary, formatMoney } from '../services/salaryService';
+import {
+  calculateMonthlySalary,
+  formatMoney,
+  getSalarySnapshot,
+  saveSalarySnapshot,
+  type SalarySnapshotItem
+} from '../services/salaryService';
 
 const props = defineProps<{
   settings: AttendanceSettings;
@@ -22,6 +30,14 @@ const now = new Date();
 const selectedYear = ref(now.getFullYear());
 const selectedMonth = ref(now.getMonth() + 1);
 
+const toastMessage = ref('');
+function showToast(msg: string) {
+  toastMessage.value = msg;
+  setTimeout(() => {
+    toastMessage.value = '';
+  }, 2400);
+}
+
 // 图表容器 DOM
 const chartContainer = ref<HTMLDivElement | null>(null);
 let chartInstance: echarts.ECharts | null = null;
@@ -31,9 +47,26 @@ const monthlyData = computed(() => {
   return getMonthlyStats(selectedYear.value, selectedMonth.value, props.records, props.settings);
 });
 
-// 月度薪资计算
+// 当前月份持久化薪资快照
+const currentSalarySnapshot = ref<SalarySnapshotItem | null>(null);
+
+function syncMonthlySalary(forceRecalculate = false) {
+  const existing = getSalarySnapshot(selectedYear.value, selectedMonth.value);
+  if (!forceRecalculate && existing) {
+    currentSalarySnapshot.value = existing;
+  } else {
+    // 首次查看该月份或用户显式触发重算：按当前数据核算并持久化快照
+    const fresh = calculateMonthlySalary(monthlyData.value, props.settings.salary);
+    currentSalarySnapshot.value = saveSalarySnapshot(selectedYear.value, selectedMonth.value, fresh);
+    if (forceRecalculate) {
+      showToast(`${selectedYear.value}年${selectedMonth.value}月 薪资已按最新规则重新核算完成`);
+    }
+  }
+}
+
+// 月度薪资数据（优先使用已固化的月度薪资快照，确保历史薪资在设置变更时不被清零或篡改）
 const monthlySalary = computed(() => {
-  return calculateMonthlySalary(monthlyData.value, props.settings.salary);
+  return currentSalarySnapshot.value || calculateMonthlySalary(monthlyData.value, props.settings.salary);
 });
 
 // 年度统计
@@ -241,6 +274,10 @@ function handleResize() {
   chartInstance?.resize();
 }
 
+watch([selectedYear, selectedMonth], () => {
+  syncMonthlySalary(false);
+});
+
 watch([mode, selectedYear, selectedMonth, () => props.records, () => props.settings], () => {
   initOrUpdateChart();
 });
@@ -250,6 +287,7 @@ const observer = new MutationObserver(() => {
 });
 
 onMounted(() => {
+  syncMonthlySalary(false);
   initOrUpdateChart();
   window.addEventListener('resize', handleResize);
   observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
@@ -290,6 +328,15 @@ function nextPeriod() {
 
 <template>
   <div class="space-y-3 pb-12">
+    <!-- Notion 浮动通知 Toast -->
+    <div
+      v-if="toastMessage"
+      class="fixed top-14 left-1/2 -translate-x-1/2 z-50 bg-[#37352f] text-white dark:bg-[#e3e2de] dark:text-[#191919] px-3.5 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 shadow-md animate-fade-in"
+    >
+      <CheckCircle class="w-3.5 h-3.5 text-[#448361]" />
+      <span>{{ toastMessage }}</span>
+    </div>
+
     <!-- Notion 风格筛选器与模式切换 -->
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-1 py-1">
       <!-- 维度切换：月度 vs 年度 (Notion Pill Tabs) -->
@@ -429,16 +476,35 @@ function nextPeriod() {
       v-if="mode === 'month'"
       class="bg-white dark:bg-[#202020] p-4 rounded-lg border border-[#e9e9e7] dark:border-[#2f3437] space-y-3.5 shadow-2xs"
     >
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-2 border-b border-[#e9e9e7] dark:border-[#2f3437] gap-1.5">
-        <div class="flex items-center gap-2">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-2 border-b border-[#e9e9e7] dark:border-[#2f3437] gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
           <Calculator class="w-4 h-4 text-[#6940a5] dark:text-[#9a6dd7]" :stroke-width="1.75" />
           <h3 class="font-medium text-[#37352f] dark:text-[#e3e2de] text-xs sm:text-sm">
             {{ selectedYear }} 年 {{ selectedMonth }} 月 薪资核算明细
           </h3>
+          <span
+            v-if="currentSalarySnapshot?.calculatedAt"
+            class="text-[10px] text-[#787774] dark:text-[#9b9a97] bg-[#f1f1ef] dark:bg-[#2a2a2a] px-1.5 py-0.5 rounded font-mono hidden sm:inline"
+            :title="`核算归档时间: ${currentSalarySnapshot.calculatedAt}`"
+          >
+            快照已归档 ({{ currentSalarySnapshot.calculatedAt }})
+          </span>
         </div>
-        <div class="text-[11px] text-[#9b9a97]">
-          折算时薪: <span class="font-mono text-[#6940a5] dark:text-[#9a6dd7] font-semibold">{{ formatMoney(monthlySalary.hourlyWage) }}</span> /h
-          <span class="text-[10px] ml-1">（日薪 {{ formatMoney(monthlySalary.dailyWage) }} ÷ 8）</span>
+
+        <div class="flex items-center gap-3 self-end sm:self-auto">
+          <div class="text-[11px] text-[#9b9a97]">
+            折算时薪: <span class="font-mono text-[#6940a5] dark:text-[#9a6dd7] font-semibold">{{ formatMoney(monthlySalary.hourlyWage) }}</span> /h
+          </div>
+
+          <button
+            type="button"
+            @click="syncMonthlySalary(true)"
+            class="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium text-[#6940a5] dark:text-[#9a6dd7] border border-[#e9e9e7] dark:border-[#2f3437] bg-[#f4f0f7] dark:bg-[#2b2438] hover:bg-[#ede8f5] dark:hover:bg-[#342a45] transition-colors shadow-2xs cursor-pointer"
+            title="按当前最新的打卡记录与规则设置重新计算本月薪资并刷新快照"
+          >
+            <RotateCcw class="w-3.5 h-3.5 text-[#6940a5] dark:text-[#9a6dd7]" :stroke-width="1.75" />
+            <span>重新核算</span>
+          </button>
         </div>
       </div>
 

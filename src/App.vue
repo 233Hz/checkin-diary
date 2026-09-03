@@ -15,6 +15,11 @@ import StatsView from './views/StatsView.vue';
 import SettingsView from './views/SettingsView.vue';
 
 const activeTab = ref<'calendar' | 'stats' | 'settings'>('calendar');
+const settingsViewRef = ref<{
+  hasUnsavedChanges?: boolean;
+  discardChanges?: () => void;
+  saveChanges?: () => void;
+} | null>(null);
 
 const settings = ref<AttendanceSettings>(getSettings());
 const records = ref<Record<string, DailyRecord>>({});
@@ -22,6 +27,19 @@ const records = ref<Record<string, DailyRecord>>({});
 function loadAllData() {
   settings.value = getSettings();
   records.value = getRecords();
+}
+
+function handleTabChange(targetTab: 'calendar' | 'stats' | 'settings') {
+  if (activeTab.value === targetTab) return;
+  if (activeTab.value === 'settings' && settingsViewRef.value?.hasUnsavedChanges) {
+    const confirmLeave = confirm('您在设置页面有未保存的修改，离开将放弃草稿并恢复为上次已保存的设置。确定要离开吗？');
+    if (confirmLeave) {
+      settingsViewRef.value?.discardChanges?.();
+      activeTab.value = targetTab;
+    }
+    return;
+  }
+  activeTab.value = targetTab;
 }
 
 function handleSaveRecord(record: DailyRecord) {
@@ -49,6 +67,12 @@ function handleUpdateSettings(newSettings: AttendanceSettings) {
 
 onMounted(() => {
   loadAllData();
+  window.addEventListener('beforeunload', (e) => {
+    if (settingsViewRef.value?.hasUnsavedChanges) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
 });
 </script>
 
@@ -57,7 +81,7 @@ onMounted(() => {
     <!-- 导航栏组件（自动适配桌面端顶部与移动端底部） -->
     <Navigation
       :active-tab="activeTab"
-      @update:active-tab="activeTab = $event"
+      @update:active-tab="handleTabChange"
     />
 
     <!-- 主体内容容器 -->
@@ -78,6 +102,7 @@ onMounted(() => {
             :records="records"
           />
           <SettingsView
+            ref="settingsViewRef"
             v-else-if="activeTab === 'settings'"
             :settings="settings"
             :records="records"

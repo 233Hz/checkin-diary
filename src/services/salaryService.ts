@@ -137,3 +137,58 @@ export function calculateMonthlySalary(
     netSalary,
   };
 }
+
+const SALARY_SNAPSHOTS_KEY = 'checkin_diary_salary_snapshots_v1';
+
+export interface SalarySnapshotItem extends SalaryBreakdown {
+  year: number;
+  month: number;
+  calculatedAt: string;
+}
+
+export function getAllSalarySnapshots(): Record<string, SalarySnapshotItem> {
+  try {
+    const raw = localStorage.getItem(SALARY_SNAPSHOTS_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, SalarySnapshotItem>;
+  } catch (err) {
+    console.error('Failed to load salary snapshots:', err);
+    return {};
+  }
+}
+
+export function getSalarySnapshot(year: number, month: number): SalarySnapshotItem | null {
+  const key = `${year}-${String(month).padStart(2, '0')}`;
+  const all = getAllSalarySnapshots();
+  return all[key] || null;
+}
+
+export function saveSalarySnapshot(
+  year: number,
+  month: number,
+  breakdown: SalaryBreakdown
+): SalarySnapshotItem {
+  const key = `${year}-${String(month).padStart(2, '0')}`;
+  const all = getAllSalarySnapshots();
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const timeStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+
+  const snapshot: SalarySnapshotItem = {
+    ...breakdown,
+    year,
+    month,
+    calculatedAt: timeStr,
+  };
+  all[key] = snapshot;
+  try {
+    localStorage.setItem(SALARY_SNAPSHOTS_KEY, JSON.stringify(all));
+  } catch (err) {
+    console.error('Failed to save salary snapshot:', err);
+  }
+  return snapshot;
+}
+
+export function clearSalarySnapshots(): void {
+  localStorage.removeItem(SALARY_SNAPSHOTS_KEY);
+}
